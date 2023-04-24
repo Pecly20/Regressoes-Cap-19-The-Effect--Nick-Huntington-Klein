@@ -1,0 +1,138 @@
+
+
+
+installed.packages("tidyverse")
+
+#1)
+
+library(tidyverse)
+gt <- causaldata::gov_transfers
+
+# Use cut() to create bins, using breaks to make sure it breaks at 0
+# (-15:15)*.02/15 gives 15 breaks from -.02 to .02
+binned <- gt %>%
+  mutate(Inc_Bins = cut(Income_Centered,
+                        breaks = (-15:15)*(.02/15))) %>%
+  group_by(Inc_Bins) %>%
+  summarize(Support = mean(Support),
+            Income = mean(Income_Centered))
+# Taking the mean of Income lets us plot data roughly at the bin midpoints
+
+ggplot(binned, aes(x = Income, y = Support)) + 
+  geom_line() + 
+  # Add a cutoff line
+  geom_vline(aes(xintercept = 0), linetype = 'dashed')
+
+# 2)
+library(tidyverse); library(modelsummary)
+gt <- causaldata::gov_transfers
+
+# Linear term and a squared term with "treated" interactions
+m <- lm(Support ~ Income_Centered*Participation +
+          I(Income_Centered^2)*Participation, data = gt)
+
+# Add a triangular kernel weight
+kweight <- function(x) {
+  # To start at a weight of 0 at x = 0, and impose a bandwidth of .01, 
+  # we need a "slope" of -1/.01 = 100, 
+  # and to go in either direction use the absolute value
+  w <- 1 - 100*abs(x)
+  # if further away than .01, the weight is 0, not negative
+  w <- ifelse(w < 0, 0, w)
+  return(w)
+}
+
+# Run the same model but with the weight
+mw <- lm(Support ~ Income_Centered*Participation, data = gt,
+         weights = kweight(Income_Centered))
+
+# See the results with heteroskedasticity-robust SEs
+msummary(list('Quadratic' = m, 'Linear with Kernel Weight' = mw), 
+         stars = c('*' = .1, '**' = .05, '***' = .01), vcov = 'robust')
+
+
+
+#3)
+
+install.packages("rdrobust")
+
+library(tidyverse); library(rdrobust)
+gt <- causaldata::gov_transfers
+
+# Estimate regression discontinuity and plot it
+m <- rdrobust(gt$Support, gt$Income_Centered, c = 0)
+summary(m)
+# Note, by default, rdrobust and rdplot use different numbers
+# of polynomial terms. You can set the p option to standardize them.
+rdplot(gt$Support, gt$Income_Centered)
+
+
+#4)
+
+
+install.packages("fixest")
+install.packages("modelsummary")
+
+
+library(tidyverse); library(fixest); library(modelsummary)
+vet <- causaldata::mortgages
+
+# Create an "above-cutoff" variable as the instrument
+vet <- vet %>% mutate(above = qob_minus_kw > 0)
+
+# Impose a bandwidth of 12 quarters on either side
+vet <- vet %>%  filter(abs(qob_minus_kw) < 12)
+
+m <- feols(home_ownership ~
+             nonwhite  | # Control for race
+             bpl + qob | # fixed effect controls
+             qob_minus_kw*vet_wwko ~ # Instrument our standard RDD
+             qob_minus_kw*above, # with being above the cutoff
+           se = 'hetero', # heteroskedasticity-robust SEs
+           data = vet) 
+
+# And look at the results
+msummary(m, stars = c('*' = .1, '**' = .05, '***' = .01))
+
+# 5)
+
+library(tidyverse); library(rdrobust)
+vet <- causaldata::mortgages
+
+# It will apply a bandwidth anyway, but having it
+# check the whole bandwidth space will be slow. So let's
+# pre-limit it to a reasonable range of 12 quarters
+vet <- vet %>%
+  filter(abs(qob_minus_kw) <= 12)
+
+# Create our matrix of controls
+controls <- vet %>%
+  select(nonwhite, bpl, qob) %>%
+  mutate(qob = factor(qob))
+# and make it a matrix with dummies
+conmatrix <- model.matrix(~., data = controls)
+
+# This is fairly slow due to the controls, beware!
+m <- rdrobust(vet$home_ownership,
+              vet$qob_minus_kw,
+              fuzzy = vet$vet_wwko,
+              c = 0,
+              covs = conmatrix)
+
+summary(m)
+
+
+#6)
+
+install.packages("rdensity")
+
+
+library(tidyverse); library(rddensity)
+gt <- causaldata::gov_transfers_density  %>%
+  filter(abs(Income_Centered) < .02)
+
+# Estimate the discontinuity
+gt %>%
+  pull(Income_Centered) %>%
+  rddensity(c = 0) %>%
+  summary()
